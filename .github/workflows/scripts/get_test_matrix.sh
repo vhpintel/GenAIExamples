@@ -9,16 +9,28 @@ set -e
 changed_files=$changed_files
 test_mode=$test_mode
 run_matrix="{\"include\":["
-hardware_list="xeon gaudi" # current support hardware list
 
 examples=$(printf '%s\n' "${changed_files[@]}" | grep '/' | cut -d'/' -f1 | sort -u)
 for example in ${examples}; do
+    if [[ ! -d $WORKSPACE/$example ]]; then continue; fi
     cd $WORKSPACE/$example
     if [[ ! $(find . -type f | grep ${test_mode}) ]]; then continue; fi
+    cd tests
+    ls -l
+    if [[ "$test_mode" == "docker_image_build" ]]; then
+        hardware_list="gaudi xeon"
+    else
+        find_name="test_${test_mode}*_on_*.sh"
+        hardware_list=$(find . -type f -name "${find_name}" | cut -d/ -f2 | cut -d. -f1 | awk -F'_on_' '{print $2}'| sort -u)
+    fi
+    echo -e "Test supported hardware list: \n${hardware_list}"
 
     run_hardware=""
-    if [[ $(printf '%s\n' "${changed_files[@]}" | grep ${example} | cut -d'/' -f2 | grep -E '*.py|Dockerfile*|ui|docker_image_build' ) ]]; then
-        # run test on all hardware if megaservice or ui code change
+    if [[ $(printf '%s\n' "${changed_files[@]}" | grep ${example} | cut -d'/' -f2 | grep -E '\.py|Dockerfile*|ui|docker_image_build' ) ]]; then
+        echo "run test on all hardware if megaservice or ui code change..."
+        run_hardware=$hardware_list
+    elif [[ $(printf '%s\n' "${changed_files[@]}" | grep ${example} | grep 'tests'| cut -d'/' -f3 | grep -vE '^test_|^_test' ) ]]; then
+        echo "run test on all hardware if common test scripts change..."
         run_hardware=$hardware_list
     else
         for hardware in ${hardware_list}; do
@@ -28,6 +40,11 @@ for example in ${examples}; do
         done
     fi
     for hw in ${run_hardware}; do
+        # TODO: remove this condition when ROCm hardware is available
+        if [[ "${hw}" == "rocm" ]]; then
+            echo "Skip test on ROCm hardware for 2 weeks due to lack of test machine..."
+            continue
+        fi
         run_matrix="${run_matrix}{\"example\":\"${example}\",\"hardware\":\"${hw}\"},"
     done
 done

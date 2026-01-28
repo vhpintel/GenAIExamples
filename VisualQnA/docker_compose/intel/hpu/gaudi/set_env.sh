@@ -2,8 +2,22 @@
 
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
-export LVM_MODEL_ID="llava-hf/llava-v1.6-mistral-7b-hf"
+pushd "$SCRIPT_DIR/../../../../../" > /dev/null
+source .set_env.sh
+popd > /dev/null
+
+# Download Grafana configurations
+pushd "${SCRIPT_DIR}/grafana/dashboards" > /dev/null
+source download_opea_dashboard.sh
+popd > /dev/null
+
+export host_ip=$(hostname -I | awk '{print $1}')
+# Set network proxy settings
+export no_proxy="${no_proxy},${host_ip},vllm-service,tgi-llava-xeon-server,visualqna-xeon-backend-server,opea_prometheus,grafana,node-exporter,$JAEGER_IP" # Example: no_proxy="localhost, 127.0.0.1, 192.168.1.1"
+# export LVM_MODEL_ID="llava-hf/llava-v1.6-mistral-7b-hf"
+export LVM_MODEL_ID="llava-hf/llava-1.5-7b-hf"
 export LVM_ENDPOINT="http://${host_ip}:8399"
 export LVM_SERVICE_PORT=9399
 export MEGA_SERVICE_HOST_IP=${host_ip}

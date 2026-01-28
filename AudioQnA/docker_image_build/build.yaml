@@ -5,57 +5,106 @@ services:
   audioqna:
     build:
       args:
+        IMAGE_REPO: ${REGISTRY}
+        BASE_TAG: ${TAG}
         http_proxy: ${http_proxy}
         https_proxy: ${https_proxy}
         no_proxy: ${no_proxy}
       context: ../
       dockerfile: ./Dockerfile
     image: ${REGISTRY:-opea}/audioqna:${TAG:-latest}
+  audioqna-openeuler:
+    build:
+      args:
+        IMAGE_REPO: ${REGISTRY}
+        BASE_TAG: ${TAG}
+        http_proxy: ${http_proxy}
+        https_proxy: ${https_proxy}
+        no_proxy: ${no_proxy}
+      context: ../
+      dockerfile: ./Dockerfile.openEuler
+    image: ${REGISTRY:-opea}/audioqna:${TAG:-latest}-openeuler
+  audioqna-ui:
+    build:
+      context: ../ui
+      dockerfile: ./docker/Dockerfile
+    extends: audioqna
+    image: ${REGISTRY:-opea}/audioqna-ui:${TAG:-latest}
+  audioqna-ui-openeuler:
+    build:
+      context: ../ui
+      dockerfile: ./docker/Dockerfile.openEuler
+    extends: audioqna
+    image: ${REGISTRY:-opea}/audioqna-ui:${TAG:-latest}-openeuler
+  audioqna-multilang:
+    build:
+      context: ../
+      dockerfile: ./Dockerfile.multilang
+    extends: audioqna
+    image: ${REGISTRY:-opea}/audioqna-multilang:${TAG:-latest}
   whisper-gaudi:
     build:
       context: GenAIComps
-      dockerfile: comps/asr/whisper/dependency/Dockerfile.intel_hpu
+      dockerfile: comps/third_parties/whisper/src/Dockerfile.intel_hpu
     extends: audioqna
     image: ${REGISTRY:-opea}/whisper-gaudi:${TAG:-latest}
   whisper:
     build:
       context: GenAIComps
-      dockerfile: comps/asr/whisper/dependency/Dockerfile
+      dockerfile: comps/third_parties/whisper/src/Dockerfile
     extends: audioqna
     image: ${REGISTRY:-opea}/whisper:${TAG:-latest}
+  whisper-openeuler:
+    build:
+      context: GenAIComps
+      dockerfile: comps/third_parties/whisper/src/Dockerfile.openEuler
+    extends: audioqna
+    image: ${REGISTRY:-opea}/whisper:${TAG:-latest}-openeuler
   asr:
     build:
       context: GenAIComps
-      dockerfile: comps/asr/whisper/Dockerfile
+      dockerfile: comps/asr/src/Dockerfile
     extends: audioqna
     image: ${REGISTRY:-opea}/asr:${TAG:-latest}
-  llm-tgi:
+  llm-textgen:
     build:
       context: GenAIComps
-      dockerfile: comps/llms/text-generation/tgi/Dockerfile
+      dockerfile: comps/llms/src/text-generation/Dockerfile
     extends: audioqna
-    image: ${REGISTRY:-opea}/llm-tgi:${TAG:-latest}
+    image: ${REGISTRY:-opea}/llm-textgen:${TAG:-latest}
   speecht5-gaudi:
     build:
       context: GenAIComps
-      dockerfile: comps/tts/speecht5/dependency/Dockerfile.intel_hpu
+      dockerfile: comps/third_parties/speecht5/src/Dockerfile.intel_hpu
     extends: audioqna
     image: ${REGISTRY:-opea}/speecht5-gaudi:${TAG:-latest}
   speecht5:
     build:
       context: GenAIComps
-      dockerfile: comps/tts/speecht5/dependency/Dockerfile
+      dockerfile: comps/third_parties/speecht5/src/Dockerfile
     extends: audioqna
     image: ${REGISTRY:-opea}/speecht5:${TAG:-latest}
+  speecht5-openeuler:
+    build:
+      context: GenAIComps
+      dockerfile: comps/third_parties/speecht5/src/Dockerfile.openEuler
+    extends: audioqna
+    image: ${REGISTRY:-opea}/speecht5:${TAG:-latest}-openeuler
   tts:
     build:
       context: GenAIComps
-      dockerfile: comps/tts/speecht5/Dockerfile
+      dockerfile: comps/tts/src/Dockerfile
     extends: audioqna
     image: ${REGISTRY:-opea}/tts:${TAG:-latest}
   gpt-sovits:
     build:
       context: GenAIComps
-      dockerfile: comps/tts/gpt-sovits/Dockerfile
+      dockerfile: comps/third_parties/gpt-sovits/src/Dockerfile
     extends: audioqna
     image: ${REGISTRY:-opea}/gpt-sovits:${TAG:-latest}
+  vllm-rocm:
+    build:
+      context: GenAIComps
+      dockerfile: comps/third_parties/vllm/src/Dockerfile.amd_gpu
+    extends: audioqna
+    image: ${REGISTRY:-opea}/vllm-rocm:${TAG:-latest}

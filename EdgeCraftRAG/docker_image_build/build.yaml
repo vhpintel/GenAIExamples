@@ -1,0 +1,26 @@
+# Copyright (C) 2024 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+services:
+  edgecraftrag:
+    build:
+      context: ../
+      args:
+        IMAGE_REPO: ${REGISTRY}
+        BASE_TAG: ${TAG}
+        http_proxy: ${http_proxy}
+        https_proxy: ${https_proxy}
+      dockerfile: ./Dockerfile
+    image: ${REGISTRY:-opea}/edgecraftrag:${TAG:-latest}
+  edgecraftrag-server:
+    build:
+      context: ../
+      dockerfile: ./Dockerfile.server
+    extends: edgecraftrag
+    image: ${REGISTRY:-opea}/edgecraftrag-server:${TAG:-latest}
+  edgecraftrag-ui:
+    build:
+      context: ../
+      dockerfile: ./ui/docker/Dockerfile.ui
+    extends: edgecraftrag
+    image: ${REGISTRY:-opea}/edgecraftrag-ui:${TAG:-latest}

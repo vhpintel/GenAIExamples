@@ -1,38 +1,25 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
+import os
+from typing import Any
 
 import requests
 
 
-def search_knowledge_base(query: str, url: str, request_type="chat_completion") -> str:
+def search_knowledge_base(query: str, args: Any) -> str:
     """Search the knowledge base for a specific query."""
+    url = os.environ.get("RETRIEVAL_TOOL_URL", "http://localhost:8889/v1/retrievaltool")
     print(url)
     proxies = {"http": ""}
-    if request_type == "chat_completion":
-        print("Sending chat completion request")
-        payload = {
-            "messages": query,
-            "k": 5,
-            "top_n": 2,
-        }
-    else:
-        print("Sending text request")
-        payload = {
-            "text": query,
-        }
+    payload = {"messages": query, "k": args.k, "top_n": args.top_n}
     response = requests.post(url, json=payload, proxies=proxies)
     print(response)
     if "documents" in response.json():
         docs = response.json()["documents"]
         context = ""
         for i, doc in enumerate(docs):
-            if i == 0:
-                context = str(i) + ": " + doc
-            else:
-                context += "\n" + str(i) + ": " + doc
-        # print(context)
+            context += f"Doc[{i+1}]:\n{doc}\n"
         return context
     elif "text" in response.json():
         return response.json()["text"]
@@ -40,32 +27,23 @@ def search_knowledge_base(query: str, url: str, request_type="chat_completion") 
         docs = response.json()["reranked_docs"]
         context = ""
         for i, doc in enumerate(docs):
-            if i == 0:
-                context = doc["text"]
-            else:
-                context += "\n" + doc["text"]
-        # print(context)
+            context += f"Doc[{i+1}]:\n{doc}\n"
         return context
     else:
         return "Error parsing response from the knowledge base."
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Index data")
-    parser.add_argument("--host_ip", type=str, default="localhost", help="Host IP")
-    parser.add_argument("--port", type=int, default=8889, help="Port")
-    parser.add_argument("--request_type", type=str, default="chat_completion", help="Test type")
-    args = parser.parse_args()
-    print(args)
-
-    host_ip = args.host_ip
-    port = args.port
-    url = "http://{host_ip}:{port}/v1/retrievaltool".format(host_ip=host_ip, port=port)
-
-    response = search_knowledge_base("OPEA", url, request_type=args.request_type)
-
-    print(response)
-
-
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test the knowledge base search.")
+    parser.add_argument("--k", type=int, default=5, help="retriever top k")
+    parser.add_argument("--top_n", type=int, default=2, help="reranker top n")
+    args = parser.parse_args()
+
+    resp = search_knowledge_base("What is OPEA?", args)
+
+    print(resp)
+
+    if not resp.startswith("Error"):
+        print("Test successful!")

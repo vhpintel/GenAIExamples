@@ -2,69 +2,106 @@
 # SPDX-License-Identifier: Apache-2.0
 
 services:
-  tgi-service:
-    image: ghcr.io/huggingface/tgi-gaudi:2.0.5
-    container_name: tgi-gaudi-server
+  vllm-service:
+    image: opea/vllm-gaudi:1.4
+    container_name: docsum-gaudi-vllm-service
     ports:
-      - "8008:80"
+      - ${LLM_ENDPOINT_PORT:-8008}:80
+    volumes:
+      - "${MODEL_CACHE:-./data}:/root/.cache/huggingface/hub"
     environment:
       no_proxy: ${no_proxy}
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
-      HUGGING_FACE_HUB_TOKEN: ${HUGGINGFACEHUB_API_TOKEN}
-      ENABLE_HPU_GRAPH: true
-      LIMIT_HPU_GRAPH: true
-      USE_FLASH_ATTENTION: true
-      FLASH_ATTENTION_RECOMPUTE: true
-    volumes:
-      - "./data:/data"
+      HF_TOKEN: ${HF_TOKEN}
+      HABANA_VISIBLE_DEVICES: all
+      OMPI_MCA_btl_vader_single_copy_mechanism: none
+      LLM_MODEL_ID: ${LLM_MODEL_ID}
+      NUM_CARDS: ${NUM_CARDS}
+      VLLM_SKIP_WARMUP: ${VLLM_SKIP_WARMUP:-false}
+      VLLM_TORCH_PROFILER_DIR: "/mnt"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 100
     runtime: habana
     cap_add:
       - SYS_NICE
     ipc: host
-    command: --model-id ${LLM_MODEL_ID} --max-input-length 1024 --max-total-tokens 2048
-  llm:
-    image: ${REGISTRY:-opea}/llm-docsum-tgi:${TAG:-latest}
-    container_name: llm-docsum-gaudi-server
+    command: --model $LLM_MODEL_ID --tensor-parallel-size ${NUM_CARDS} --host 0.0.0.0 --port 80 --block-size ${BLOCK_SIZE} --max-num-seqs ${MAX_NUM_SEQS} --max-seq-len-to-capture ${MAX_SEQ_LEN_TO_CAPTURE}
+
+  llm-docsum-vllm:
+    image: ${REGISTRY:-opea}/llm-docsum:${TAG:-latest}
+    container_name: docsum-gaudi-llm-server
     depends_on:
-      - tgi-service
+      vllm-service:
+        condition: service_healthy
     ports:
-      - "9000:9000"
+      - ${LLM_PORT:-9000}:9000
     ipc: host
     environment:
       no_proxy: ${no_proxy}
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
-      TGI_LLM_ENDPOINT: ${TGI_LLM_ENDPOINT}
-      HUGGINGFACEHUB_API_TOKEN: ${HUGGINGFACEHUB_API_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
+      MAX_INPUT_TOKENS: ${MAX_INPUT_TOKENS}
+      MAX_TOTAL_TOKENS: ${MAX_TOTAL_TOKENS}
+      LLM_ENDPOINT: ${LLM_ENDPOINT}
+      LLM_MODEL_ID: ${LLM_MODEL_ID}
+      DocSum_COMPONENT_NAME: ${DocSum_COMPONENT_NAME}
+      LOGFLAG: ${LOGFLAG:-False}
     restart: unless-stopped
+
+  whisper:
+    image: ${REGISTRY:-opea}/whisper:${TAG:-latest}
+    container_name: docsum-gaudi-whisper-server
+    ports:
+      - ${ASR_SERVICE_PORT:-7066}:7066
+    ipc: host
+    environment:
+      no_proxy: ${no_proxy}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      HABANA_VISIBLE_DEVICES: all
+      OMPI_MCA_btl_vader_single_copy_mechanism: none
+    runtime: habana
+    cap_add:
+      - SYS_NICE
+    restart: unless-stopped
+
   docsum-gaudi-backend-server:
     image: ${REGISTRY:-opea}/docsum:${TAG:-latest}
     container_name: docsum-gaudi-backend-server
     depends_on:
-      - tgi-service
-      - llm
+      - vllm-service
+      - llm-docsum-vllm
     ports:
-      - "8888:8888"
+      - "${BACKEND_SERVICE_PORT:-8888}:8888"
     environment:
       - no_proxy=${no_proxy}
       - https_proxy=${https_proxy}
       - http_proxy=${http_proxy}
       - MEGA_SERVICE_HOST_IP=${MEGA_SERVICE_HOST_IP}
       - LLM_SERVICE_HOST_IP=${LLM_SERVICE_HOST_IP}
+      - LLM_SERVICE_PORT=${LLM_PORT}
+      - ASR_SERVICE_HOST_IP=${ASR_SERVICE_HOST_IP}
+      - ASR_SERVICE_PORT=${ASR_SERVICE_PORT}
     ipc: host
     restart: always
-  docsum-gaudi-ui-server:
-    image: ${REGISTRY:-opea}/docsum-ui:${TAG:-latest}
+
+  docsum-gradio-ui:
+    image: ${REGISTRY:-opea}/docsum-gradio-ui:${TAG:-latest}
     container_name: docsum-gaudi-ui-server
     depends_on:
       - docsum-gaudi-backend-server
     ports:
-      - "5173:5173"
+      - "${FRONTEND_SERVICE_PORT:-5173}:5173"
     environment:
       - no_proxy=${no_proxy}
       - https_proxy=${https_proxy}
       - http_proxy=${http_proxy}
+      - BACKEND_SERVICE_ENDPOINT=${BACKEND_SERVICE_ENDPOINT}
       - DOC_BASE_URL=${BACKEND_SERVICE_ENDPOINT}
     ipc: host
     restart: always
@@ -72,3 +109,6 @@ services:
 networks:
   default:
     driver: bridge
+
+volumes:
+  data:

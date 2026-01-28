@@ -1,67 +1,19 @@
-# Build Mega Service of ChatQnA (with Qdrant) on Xeon
+# Deploying ChatQnA with Qdrant on Intel® Xeon® Processors
 
-This document outlines the deployment process for a ChatQnA application utilizing the [GenAIComps](https://github.com/opea-project/GenAIComps.git) microservice pipeline on Intel Xeon server. The steps include Docker image creation, container deployment via Docker Compose, and service execution to integrate microservices such as `embedding`, `retriever`, `rerank`, and `llm`. We will publish the Docker images to Docker Hub soon, it will simplify the deployment process for this service.
+This document outlines the deployment process for a ChatQnA application utilizing the [GenAIComps](https://github.com/opea-project/GenAIComps.git) microservice pipeline on Intel® Xeon® servers. The pipeline integrates **Qdrant** as the vector database (VectorDB) and includes microservices such as `embedding`, `retriever`, `rerank`, and `llm`.
 
-## 🚀 Apply Xeon Server on AWS
+---
 
-To apply a Xeon server on AWS, start by creating an AWS account if you don't have one already. Then, head to the [EC2 Console](https://console.aws.amazon.com/ec2/v2/home) to begin the process. Within the EC2 service, select the Amazon EC2 M7i or M7i-flex instance type to leverage the power of 4th Generation Intel Xeon Scalable processors. These instances are optimized for high-performance computing and demanding workloads.
+## Table of Contents
 
-For detailed information about these instance types, you can refer to this [link](https://aws.amazon.com/ec2/instance-types/m7i/). Once you've chosen the appropriate instance type, proceed with configuring your instance settings, including network configurations, security groups, and storage options.
+1. [Build Docker Images](#build-docker-images)
+2. [Validate Microservices](#validate-microservices)
+3. [Launch the UI](#launch-the-ui)
+4. [Launch the Conversational UI (Optional)](#launch-the-conversational-ui-optional)
 
-After launching your instance, you can connect to it using SSH (for Linux instances) or Remote Desktop Protocol (RDP) (for Windows instances). From there, you'll have full access to your Xeon server, allowing you to install, configure, and manage your applications as needed.
+---
 
-**Certain ports in the EC2 instance need to opened up in the security group, for the microservices to work with the curl commands**
-
-> See one example below. Please open up these ports in the EC2 instance based on the IP addresses you want to allow
-
-```
-qdrant-vector-db
-===============
-Port 6333 - Open to 0.0.0.0/0
-Port 6334 - Open to 0.0.0.0/0
-
-dataprep-qdrant-server
-======================
-Port 6043 - Open to 0.0.0.0/0
-
-tei_embedding_service
-=====================
-Port 6040 - Open to 0.0.0.0/0
-
-embedding
-=========
-Port 6044 - Open to 0.0.0.0/0
-
-retriever
-=========
-Port 6045 - Open to 0.0.0.0/0
-
-tei_reranking_service
-================
-Port 6041 - Open to 0.0.0.0/0
-
-reranking
-=========
-Port 6046 - Open to 0.0.0.0/0
-
-tgi-service
-===========
-Port 6042 - Open to 0.0.0.0/0
-
-llm
-===
-Port 6047 - Open to 0.0.0.0/0
-
-chaqna-xeon-backend-server
-==========================
-Port 8912 - Open to 0.0.0.0/0
-
-chaqna-xeon-ui-server
-=====================
-Port 5173 - Open to 0.0.0.0/0
-```
-
-## 🚀 Build Docker Images
+## Build Docker Images
 
 First of all, you need to build Docker Images locally and install the python package of it.
 
@@ -73,13 +25,13 @@ cd GenAIComps
 ### 1. Build Retriever Image
 
 ```bash
-docker build --no-cache -t opea/retriever-qdrant:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/retrievers/qdrant/haystack/Dockerfile .
+docker build --no-cache -t opea/retriever:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/retrievers/src/Dockerfile .
 ```
 
 ### 2. Build Dataprep Image
 
 ```bash
-docker build --no-cache -t opea/dataprep-qdrant:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/dataprep/qdrant/langchain/Dockerfile .
+docker build --no-cache -t opea/dataprep:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/dataprep/src/Dockerfile .
 cd ..
 ```
 
@@ -113,7 +65,7 @@ Build frontend Docker image that enables Conversational experience with ChatQnA 
 ```bash
 cd GenAIExamples/ChatQnA/ui
 export BACKEND_SERVICE_ENDPOINT="http://${host_ip}:8912/v1/chatqna"
-export DATAPREP_SERVICE_ENDPOINT="http://${host_ip}:6043/v1/dataprep"
+export DATAPREP_SERVICE_ENDPOINT="http://${host_ip}:6043/v1/dataprep/ingest"
 docker build --no-cache -t opea/chatqna-conversation-ui:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy --build-arg BACKEND_SERVICE_ENDPOINT=$BACKEND_SERVICE_ENDPOINT --build-arg DATAPREP_SERVICE_ENDPOINT=$DATAPREP_SERVICE_ENDPOINT -f ./docker/Dockerfile.react .
 cd ../../../..
 ```
@@ -122,28 +74,28 @@ cd ../../../..
 
 ```bash
 cd GenAIComps
-docker build -t opea/nginx:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/nginx/Dockerfile .
+docker build -t opea/nginx:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/third_parties/nginx/src/Dockerfile .
 ```
 
 Then run the command `docker images`, you will have the following 5 Docker Images:
 
-1. `opea/dataprep-qdrant:latest`
-2. `opea/retriever-qdrant:latest`
+1. `opea/dataprep:latest`
+2. `opea/retriever:latest`
 3. `opea/chatqna:latest`
 4. `opea/chatqna-ui:latest`
 5. `opea/nginx:latest`
 
-## 🚀 Start Microservices
+## Start Microservices
 
 ### Required Models
 
 By default, the embedding, reranking and LLM models are set to a default value as listed below:
 
-| Service   | Model                     |
-| --------- | ------------------------- |
-| Embedding | BAAI/bge-base-en-v1.5     |
-| Reranking | BAAI/bge-reranker-base    |
-| LLM       | Intel/neural-chat-7b-v3-3 |
+| Service   | Model                               |
+| --------- | ----------------------------------- |
+| Embedding | BAAI/bge-base-en-v1.5               |
+| Reranking | BAAI/bge-reranker-base              |
+| LLM       | meta-llama/Meta-Llama-3-8B-Instruct |
 
 Change the `xxx_MODEL_ID` below for your needs.
 
@@ -170,7 +122,7 @@ export your_hf_api_token="Your_Huggingface_API_Token"
 **Append the value of the public IP address to the no_proxy list if you are in a proxy environment**
 
 ```
-export your_no_proxy=${your_no_proxy},"External_Public_IP",chatqna-xeon-ui-server,chatqna-xeon-backend-server,dataprep-qdrant-service,tei-embedding-service,retriever,tei-reranking-service,tgi-service
+export your_no_proxy=${your_no_proxy},"External_Public_IP",chatqna-xeon-ui-server,chatqna-xeon-backend-server,dataprep-qdrant-service,tei-embedding-service,retriever,tei-reranking-service,tgi-service,vllm-service
 ```
 
 ```bash
@@ -179,7 +131,7 @@ export http_proxy=${your_http_proxy}
 export https_proxy=${your_http_proxy}
 export EMBEDDING_MODEL_ID="BAAI/bge-base-en-v1.5"
 export RERANK_MODEL_ID="BAAI/bge-reranker-base"
-export LLM_MODEL_ID="Intel/neural-chat-7b-v3-3"
+export LLM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 export INDEX_NAME="rag-qdrant"
 ```
 
@@ -233,28 +185,28 @@ For details on how to verify the correctness of the response, refer to [how-to-v
        -H 'Content-Type: application/json'
    ```
 
-4. TGI Service
+4. LLM Backend Service
 
-   In first startup, this service will take more time to download the model files. After it's finished, the service will be ready.
+   In the first startup, this service will take more time to download, load and warm up the model. After it's finished, the service will be ready.
 
-   Try the command below to check whether the TGI service is ready.
+   Try the command below to check whether the LLM service is ready.
 
    ```bash
-   docker logs ${CONTAINER_ID} | grep Connected
+   docker logs vllm-service 2>&1 | grep complete
    ```
 
    If the service is ready, you will get the response like below.
 
-   ```
-   2024-09-03T02:47:53.402023Z  INFO text_generation_router::server: router/src/server.rs:2311: Connected
+   ```text
+   INFO: Application startup complete.
    ```
 
-   Then try the `cURL` command below to validate TGI.
+   Then try the `cURL` command below to validate vLLM service.
 
    ```bash
-   curl http://${host_ip}:6042/generate \
+   curl http://${host_ip}:6042/v1/chat/completions \
      -X POST \
-     -d '{"inputs":"What is Deep Learning?","parameters":{"max_new_tokens":17, "do_sample": true}}' \
+     -d '{"model": "meta-llama/Meta-Llama-3-8B-Instruct", "messages": [{"role": "user", "content": "What is Deep Learning?"}], "max_tokens":17}' \
      -H 'Content-Type: application/json'
    ```
 
@@ -273,7 +225,7 @@ For details on how to verify the correctness of the response, refer to [how-to-v
    Update Knowledge Base via Local File Upload:
 
    ```bash
-   curl -X POST "http://${host_ip}:6043/v1/dataprep" \
+   curl -X POST "http://${host_ip}:6043/v1/dataprep/ingest" \
         -H "Content-Type: multipart/form-data" \
         -F "files=@./your_file.pdf"
    ```
@@ -283,12 +235,12 @@ For details on how to verify the correctness of the response, refer to [how-to-v
    Add Knowledge Base via HTTP Links:
 
    ```bash
-   curl -X POST "http://${host_ip}:6043/v1/dataprep" \
+   curl -X POST "http://${host_ip}:6043/v1/dataprep/ingest" \
         -H "Content-Type: multipart/form-data" \
         -F 'link_list=["https://opea.dev"]'
    ```
 
-## 🚀 Launch the UI
+## Launch the UI
 
 To access the frontend, open the following URL in your browser: http://{host_ip}:5173. By default, the UI runs on port 5173 internally. If you prefer to use a different host port to access the frontend, you can modify the port mapping in the `compose.yaml` file as shown below:
 
@@ -300,7 +252,7 @@ To access the frontend, open the following URL in your browser: http://{host_ip}
       - "80:5173"
 ```
 
-## 🚀 Launch the Conversational UI (react)
+## Launch the Conversational UI (Optional)
 
 To access the Conversational UI frontend, open the following URL in your browser: http://{host_ip}:5174. By default, the UI runs on port 80 internally. If you prefer to use a different host port to access the frontend, you can modify the port mapping in the `compose.yaml` file as shown below:
 

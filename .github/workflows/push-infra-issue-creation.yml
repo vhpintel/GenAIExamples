@@ -8,13 +8,17 @@ on:
       - "**/docker_compose/**/compose*.yaml"
 
 name: Create an issue to GenAIInfra on push
+
+permissions:
+  contents: read
+
 jobs:
   job1:
     name: Create issue
     runs-on: ubuntu-latest
     steps:
       - name: Checkout out Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2
         with:
           fetch-depth: 0
 
@@ -38,14 +42,14 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
 
       - name: Create Issue
-        uses: daisy-ycguo/create-issue-action@stable
+        uses: dacbd/create-issue-action@fec641442c0897e734fad173cfe83ae21a2284a3
         with:
-          token: ${{ secrets.Infra_Issue_Token }}
+          token: ${{ secrets.ACTION_TOKEN }}
           owner: opea-project
           repo: GenAIInfra
           title: |
             [ci-auto] GenAIExample ${{ env.examples }} compose.yaml got changed.
-          assignees: lianhao
+          assignees: poussa
           labels: helm
           body: |
             ## GenAIExample ${{ env.examples }} compose.yaml got changed
@@ -54,6 +58,6 @@ jobs:
 
             ${{ env.changed_files }}
 
-            Please verify if the helm charts and manifests need to be changed accordingly.
+            Please verify if the helm charts need to be changed accordingly.
 
             > This issue was created automatically by CI.

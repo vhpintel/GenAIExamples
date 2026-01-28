@@ -13,7 +13,7 @@ Build text-to-image service image on Xeon with below command:
 ```bash
 git clone https://github.com/opea-project/GenAIComps.git
 cd GenAIComps
-docker build -t opea/text2image:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/text2image/Dockerfile .
+docker build -t opea/text2image:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/text2image/src/Dockerfile .
 ```
 
 ### 2. Run Docker with CLI
@@ -23,8 +23,6 @@ Select Stable Diffusion (SD) model and assign its name to a environment variable
 ```bash
 # SD1.5
 export MODEL=stable-diffusion-v1-5/stable-diffusion-v1-5
-# SD2.1
-export MODEL=stabilityai/stable-diffusion-2-1
 # SDXL
 export MODEL=stabilityai/stable-diffusion-xl-base-1.0
 # SD3

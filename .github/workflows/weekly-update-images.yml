@@ -1,27 +1,24 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-name: Weekly update base images and 3rd party images
+name: Weekly update 3rd party images
 
 on:
-  schedule:
-    - cron: "0 0 * * 0"
   workflow_dispatch:
 
 permissions:
-  contents: write
   pull-requests: write
 
 jobs:
   freeze-images:
     runs-on: ubuntu-latest
     env:
-      USER_NAME: "NeuralChatBot"
-      USER_EMAIL: "grp_neural_chat_bot@intel.com"
+      USER_NAME: "CICD-at-OPEA"
+      USER_EMAIL: "CICD@opea.dev"
       BRANCH_NAME: "update_images_tag"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2
         with:
           fetch-depth: 0
           ref: "main"

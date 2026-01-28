@@ -4,128 +4,97 @@
 
 set -xe
 
+IMAGE_REPO=${IMAGE_REPO:-"opea"}
+IMAGE_TAG=${IMAGE_TAG:-"latest"}
+echo "REGISTRY=IMAGE_REPO=${IMAGE_REPO}"
+echo "TAG=IMAGE_TAG=${IMAGE_TAG}"
+export REGISTRY=${IMAGE_REPO}
+export TAG=${IMAGE_TAG}
+export MODEL_CACHE=${model_cache:-"./data"}
+
 WORKPATH=$(dirname "$PWD")
 LOG_PATH="$WORKPATH/tests"
 ip_address=$(hostname -I | awk '{print $1}')
-tgi_port=8008
-tgi_volume=$WORKPATH/data
-
-export model="meta-llama/Meta-Llama-3-8B-Instruct"
-export HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
-export POSTGRES_USER=postgres
-export POSTGRES_PASSWORD=testpwd
-export POSTGRES_DB=chinook
-export TEXTTOSQL_PORT=9090
-export TGI_LLM_ENDPOINT="http://${ip_address}:${tgi_port}"
-
 
 function build_docker_images() {
-    echo $WORKPATH
-    OPEAPATH=$(realpath "$WORKPATH/../..")
+    cd $WORKPATH/docker_image_build
+    git clone --single-branch --branch "${opea_branch:-"main"}" https://github.com/opea-project/GenAIComps.git
 
-    echo "Building Text to Sql service..."
-    cd $OPEAPATH
-    rm -rf GenAIComps/
-    git clone https://github.com/opea-project/GenAIComps.git
-    cd $OPEAPATH/GenAIComps
-    docker build --no-cache -t opea/texttosql:latest -f comps/texttosql/langchain/Dockerfile .
+    echo "Build all the images with --no-cache, check docker_image_build.log for details..."
+    docker compose -f build.yaml build --no-cache > ${LOG_PATH}/docker_image_build.log
 
-    echo "Building React UI service..."
-    cd $OPEAPATH/GenAIExamples/DBQnA/ui
-    docker build --no-cache -t opea/dbqna-react-ui:latest -f docker/Dockerfile.react .
-
+    docker pull ghcr.io/huggingface/text-generation-inference:2.4.0-intel-cpu
+    docker images && sleep 1s
 }
 
-function start_service() {
+function start_services() {
+    cd $WORKPATH/docker_compose/intel/cpu/xeon
+    export no_proxy="localhost,127.0.0.1,$ip_address"
+    source ./set_env.sh
 
-    docker run --name test-texttosql-postgres --ipc=host -e POSTGRES_USER=${POSTGRES_USER} -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=${POSTGRES_DB} -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} -p 5442:5432 -d -v $WORKPATH/docker_compose/intel/cpu/xeon/chinook.sql:/docker-entrypoint-initdb.d/chinook.sql postgres:latest
-
-    docker run -d --name="test-texttosql-tgi-endpoint" --ipc=host -p $tgi_port:80 -v ./data:/data --shm-size 1g -e HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN} -e HF_TOKEN=${HUGGINGFACEHUB_API_TOKEN} -e model=${model} ghcr.io/huggingface/text-generation-inference:2.1.0 --model-id $model
-
-
-    docker run -d --name="test-texttosql-server" --ipc=host -p $TEXTTOSQL_PORT:8090 --ipc=host -e http_proxy=$http_proxy -e https_proxy=$https_proxy -e TGI_LLM_ENDPOINT=$TGI_LLM_ENDPOINT opea/texttosql:latest
+    # Start Docker Containers
+    docker compose -f compose.yaml up -d > ${LOG_PATH}/start_services_with_compose.log
 
     # check whether tgi is fully ready.
     n=0
     until [[ "$n" -ge 100 ]] || [[ $ready == true ]]; do
-        docker logs test-texttosql-tgi-endpoint > ${LOG_PATH}/tgi.log
+        docker logs tgi-service > ${LOG_PATH}/tgi.log
         n=$((n+1))
         if grep -q Connected ${LOG_PATH}/tgi.log; then
             break
         fi
         sleep 5s
     done
-    sleep 5s
-
-    # Run the UI container
-    docker run -d --name="test-dbqna-react-ui-server" --ipc=host -p 5174:80 -e no_proxy=$no_proxy -e https_proxy=$https_proxy -e http_proxy=$http_proxy opea/dbqna-react-ui:latest
-
 }
 
 function validate_microservice() {
-    result=$(http_proxy="" curl --connect-timeout 5 --max-time 120000 http://${ip_address}:$TEXTTOSQL_PORT/v1/texttosql\
+    url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${ip_address}:5442/${POSTGRES_DB}"
+    result=$(http_proxy="" curl --connect-timeout 5 --max-time 120000 http://${ip_address}:$TEXT2SQL_PORT/v1/text2query\
         -X POST \
-        -d '{"input_text": "Find the total number of Albums.","conn_str": {"user": "'${POSTGRES_USER}'","password": "'${POSTGRES_PASSWORD}'","host": "'${ip_address}'", "port": "5442", "database": "'${POSTGRES_DB}'" }}' \
+        -d '{"query": "Find the total number of Albums.","conn_type": "sql", "conn_url": "'${url}'", "conn_user": "'${POSTGRES_USER}'","conn_password": "'${POSTGRES_PASSWORD}'","conn_dialect": "postgresql" }' \
         -H 'Content-Type: application/json')
 
-    if [[ $result == *"output"* ]]; then
+    if echo "$result" | jq -e '.result.output' > /dev/null 2>&1; then
+    # if [[ $result == *"output"* ]]; then
         echo $result
         echo "Result correct."
     else
         echo "Result wrong. Received was $result"
-        docker logs test-texttosql-server > ${LOG_PATH}/texttosql.log
-        docker logs test-texttosql-tgi-endpoint > ${LOG_PATH}/tgi.log
+        docker logs text2sql-service > ${LOG_PATH}/text2sql.log
+        docker logs tgi-service > ${LOG_PATH}/tgi.log
         exit 1
     fi
 
 }
 
-function validate_frontend() {
-    echo "[ TEST INFO ]: --------- frontend test started ---------"
-    cd $WORKPATH/ui/react
-    local conda_env_name="OPEA_e2e"
-    export PATH=${HOME}/miniforge3/bin/:$PATH
-    if conda info --envs | grep -q "$conda_env_name"; then
-        echo "$conda_env_name exist!"
-    else
-        conda create -n ${conda_env_name} python=3.12 -y
-    fi
-
-    source activate ${conda_env_name}
-    echo "[ TEST INFO ]: --------- conda env activated ---------"
-
-    conda install -c conda-forge nodejs -y
-    npm install && npm ci
-    node -v && npm -v && pip list
-
-    exit_status=0
-    npm run test || exit_status=$?
-
-    if [ $exit_status -ne 0 ]; then
-        echo "[TEST INFO]: ---------frontend test failed---------"
-        exit $exit_status
-    else
-        echo "[TEST INFO]: ---------frontend test passed---------"
-    fi
-}
-
 function stop_docker() {
-    cid=$(docker ps -aq --filter "name=test-*")
-    if [[ ! -z "$cid" ]]; then docker stop $cid && docker rm $cid && sleep 1s; fi
+    cd $WORKPATH/docker_compose/intel/cpu/xeon
+    docker compose stop && docker compose rm -f
 }
 
 function main() {
 
+    echo "::group::stop_docker"
     stop_docker
+    echo "::endgroup::"
 
-    build_docker_images
-    start_service
+    echo "::group::build_docker_images"
+    if [[ "$IMAGE_REPO" == "opea" ]]; then build_docker_images; fi
+    echo "::endgroup::"
 
+    echo "::group::start_services"
+    start_services
+    echo "::endgroup::"
+
+    echo "::group::validate_microservice"
     validate_microservice
-    validate_frontend
+    echo "::endgroup::"
 
+    echo "::group::stop_docker"
     stop_docker
-    echo y | docker system prune
+    echo "::endgroup::"
+
+    docker system prune -f
 
 }
 

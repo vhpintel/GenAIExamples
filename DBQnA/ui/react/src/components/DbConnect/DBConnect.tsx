@@ -9,7 +9,7 @@ const DBConnect: React.FC = () => {
   const [formData, setFormData] = useState({
     user: 'postgres',
     database: 'chinook',
-    host: '10.223.24.113',
+    host: '127.0.0.1',
     password: 'testpwd',
     port: '5442',
   });
@@ -42,12 +42,20 @@ const DBConnect: React.FC = () => {
     e.preventDefault();
     try {
       let api_response: Record<string, any>;
-      api_response = await axios.post(`${TEXT_TO_SQL_URL}/postgres/health`, formData);
+      let connUrl = `postgresql://${formData.user}:${formData.password}@${formData.host}:${formData.port}/${formData.database}`;
+      let unifiedConnData = {
+        conn_type: "sql",
+        conn_url: connUrl,
+        conn_user: formData.user,
+        conn_password: formData.password,
+        conn_dialect: "postgresql",
+      };
+      api_response = await axios.post(`${TEXT_TO_SQL_URL}/db/health`, unifiedConnData);
 
       setSqlStatus(null);
       setSqlError(null);
 
-      if (api_response.data.status === 'success') {
+      if (api_response.data.status && api_response.data.status.toLowerCase().includes('success')) {
         setDbStatus(api_response.data.message);
         setDbError(null);
         setIsConnected(true);
@@ -73,13 +81,18 @@ const DBConnect: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
+      const connUrl = `postgresql://${formData.user}:${formData.password}@${formData.host}:${formData.port}/${formData.database}`;
       const payload = {
-        input_text: question,
-        conn_str: formData,
+        query: question,
+        conn_type: "sql",
+        conn_url: connUrl,
+        conn_user: formData.user,
+        conn_password: formData.password,
+        conn_dialect: "postgresql",
       };
 
       let api_response: Record<string, any>;
-      api_response = await axios.post(`${TEXT_TO_SQL_URL}/texttosql`, payload);
+      api_response = await axios.post(`${TEXT_TO_SQL_URL}/text2query`, payload);
 
       setSqlQuery(api_response.data.result.sql); // Assuming the API returns an SQL query
       setQueryOutput(api_response.data.result.output);
@@ -163,7 +176,7 @@ const DBConnect: React.FC = () => {
       </div>
 
       {/* DBQnA Section */}
-      <div className={styleClasses.textToSQLSection}>
+      <div className={styleClasses.text2SQLSection}>
         <Title order={1}>DBQnA</Title>
         {isConnected && (
           <form className={styleClasses.form} onSubmit={handleGenerateSQL}>

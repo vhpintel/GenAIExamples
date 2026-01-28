@@ -2,6 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: Build specific images on manual event
+permissions:
+  actions: read
+  contents: read
+  discussions: read
+  issues: read
+  pages: read
+  pull-requests: read
+  repository-projects: read
+  security-events: read
+  id-token: write
+  attestations: read
+  models: read
 on:
   workflow_dispatch:
     inputs:
@@ -12,7 +24,7 @@ on:
         type: string
       example:
         default: "ChatQnA"
-        description: 'Build images belong to which example?'
+        description: 'Build images belong to which example? [AgentQnA,AudioQnA,ChatQnA,CodeGen,CodeTrans,DocIndexRetriever,DocSum,FaqGen,InstructionTuning,MultimodalQnA,ProductivitySuite,RerankFinetuning,SearchQnA,Translation,VideoQnA,VisualQnA,AvatarChatbot,Text2Image,WorkflowExecAgent,DBQnA,EdgeCraftRAG,GraphRAG]'
         required: true
         type: string
       services:
@@ -30,6 +42,12 @@ on:
         description: 'OPEA branch for image build'
         required: false
         type: string
+      inject_commit:
+        default: false
+        description: "inject commit to docker images"
+        required: false
+        type: boolean
+
 jobs:
   get-test-matrix:
     runs-on: ubuntu-latest
@@ -44,7 +62,21 @@ jobs:
           echo "nodes=$nodes_json" >> $GITHUB_OUTPUT
 
   image-build:
+    permissions:
+      actions: read
+      attestations: read
+      checks: read
+      discussions: read
+      models: read
+      repository-projects: read
+      id-token: write
+      contents: read
+      issues: write
+      pages: write
+      pull-requests: write
+      security-events: read
     needs: get-test-matrix
+    if: ${{ needs.get-test-matrix.outputs.nodes != '' }}
     strategy:
       matrix:
         node: ${{ fromJson(needs.get-test-matrix.outputs.nodes) }}
@@ -56,4 +88,5 @@ jobs:
       services: ${{ inputs.services }}
       tag: ${{ inputs.tag }}
       opea_branch: ${{ inputs.opea_branch }}
+      inject_commit: ${{ inputs.inject_commit }}
     secrets: inherit

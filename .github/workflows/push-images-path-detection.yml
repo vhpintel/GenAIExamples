@@ -3,10 +3,12 @@
 
 name: Check the validity of links in docker_images_list.
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
-    types: [opened, reopened, ready_for_review, synchronize]
 
 jobs:
   check-dockerfile-paths:
@@ -17,7 +19,7 @@ jobs:
         run: sudo rm -rf ${{github.workspace}}/*
 
       - name: Checkout repo GenAIExamples
-        uses: actions/checkout@v4
+        uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2
 
       - name: Check the validity of links
         run: |

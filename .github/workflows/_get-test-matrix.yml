@@ -3,18 +3,28 @@
 
 # Support push and pull_request events
 name: Get Test Matrix
-permissions: read-all
+permissions:
+  actions: read
+  contents: read
+  checks: read
+  deployments: read
+  issues: read
+  packages: read
+  pages: read
+  pull-requests: read
+  statuses: read
+  security-events: read
 on:
   workflow_call:
     inputs:
       diff_excluded_files:
         required: false
         type: string
-        default: '.github|README.md|*.txt'
+        default: '.github|README.md'
       test_mode:
         required: false
         type: string
-        default: 'docker_compose'
+        default: 'compose'
     outputs:
       run_matrix:
         description: "The matrix string"
@@ -37,10 +47,16 @@ jobs:
           echo "checkout ref ${{ env.CHECKOUT_REF }}"
 
       - name: Checkout out Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@1e31de5234b9f8995739874a8ce0492dc87873e2
         with:
           ref: ${{ env.CHECKOUT_REF }}
           fetch-depth: 0
+
+      - name: Check Dangerous Command Injection
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+        uses: opea-project/validation/actions/check-cmd@main
+        with:
+          work_dir: ${{ github.workspace }}
 
       - name: Get test matrix
         id: get-test-matrix
@@ -54,9 +70,11 @@ jobs:
             base_commit=$(git rev-parse HEAD~1) # push event
           fi
           merged_commit=$(git log -1 --format='%H')
+          echo "print all changed files..."
+          git diff --name-only ${base_commit} ${merged_commit}
           changed_files="$(git diff --name-only ${base_commit} ${merged_commit} | \
           grep -vE '${{ inputs.diff_excluded_files }}')" || true
-          echo "changed_files=$changed_files"
+          echo "filtered changed_files=$changed_files"
           export changed_files=$changed_files
           export test_mode=${{ inputs.test_mode }}
           export WORKSPACE=${{ github.workspace }}

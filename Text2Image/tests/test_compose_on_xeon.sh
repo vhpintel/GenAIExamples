@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,19 +14,22 @@ WORKPATH=$(dirname "$PWD")
 LOG_PATH="$WORKPATH/tests"
 ip_address=$(hostname -I | awk '{print $1}')
 text2image_service_port=9379
-MODEL=stabilityai/stable-diffusion-2-1
+MODEL=stable-diffusion-v1-5/stable-diffusion-v1-5
+export MODEL=${MODEL}
 
 function build_docker_images() {
     cd $WORKPATH/docker_image_build
     if [ ! -d "GenAIComps" ] ; then
-        git clone https://github.com/opea-project/GenAIComps.git
+        git clone --depth 1 --branch ${opea_branch:-"main"} https://github.com/opea-project/GenAIComps.git
     fi
-    docker compose -f build.yaml build --no-cache > ${LOG_PATH}/docker_image_build.log
+    service_list="text2image text2image-ui nginx"
+    docker compose -f build.yaml build ${service_list} --no-cache > ${LOG_PATH}/docker_image_build.log
 }
 
-function start_service() {
+function start_services() {
+    cd $WORKPATH/docker_compose/intel/cpu/xeon
     export no_proxy="localhost,127.0.0.1,"${ip_address}
-    docker run -d --name="text2image-server" -p $text2image_service_port:$text2image_service_port --runtime=runc --ipc=host -e http_proxy=$http_proxy -e https_proxy=$https_proxy -e MODEL=$MODEL -e no_proxy=$no_proxy ${IMAGE_REPO}/text2image:${IMAGE_TAG}
+    docker compose -f compose.yaml up -d > ${LOG_PATH}/start_services_with_compose.log
     sleep 30s
 }
 
@@ -58,21 +62,33 @@ function validate_microservice() {
 }
 
 function stop_docker() {
-    cid=$(docker ps -aq --filter "name=text2image-server*")
-    if [[ ! -z "$cid" ]]; then docker stop $cid && docker rm $cid && sleep 1s; fi
+    cd $WORKPATH/docker_compose/intel/cpu/xeon
+    docker compose -f compose.yaml down
 }
 
 function main() {
 
+    echo "::group::stop_docker"
     stop_docker
+    echo "::endgroup::"
 
-    build_docker_images
-    start_service
+    echo "::group::build_docker_images"
+    if [[ "$IMAGE_REPO" == "opea" ]]; then build_docker_images; fi
+    echo "::endgroup::"
 
+    echo "::group::start_services"
+    start_services
+    echo "::endgroup::"
+
+    echo "::group::validate_microservice"
     validate_microservice
+    echo "::endgroup::"
 
+    echo "::group::stop_docker"
     stop_docker
-    echo y | docker system prune
+    echo "::endgroup::"
+
+    docker system prune -f
 
 }
 

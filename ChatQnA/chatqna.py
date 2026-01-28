@@ -3,18 +3,34 @@
 
 import argparse
 import json
+import logging
 import os
 import re
 
-from comps import ChatQnAGateway, MicroService, ServiceOrchestrator, ServiceType
+from comps import CustomLogger, MegaServiceEndpoint, MicroService, ServiceOrchestrator, ServiceRoleType, ServiceType
+from comps.cores.mega.utils import handle_message
+from comps.cores.proto.api_protocol import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionResponseChoice,
+    ChatMessage,
+    UsageInfo,
+)
+from comps.cores.proto.docarray import LLMParams, RerankerParms, RetrieverParms
+from fastapi import Request
+from fastapi.responses import StreamingResponse
 from langchain_core.prompts import PromptTemplate
+
+logger = CustomLogger(__name__)
+log_level = logging.DEBUG if os.getenv("LOGFLAG", "").lower() == "true" else logging.INFO
+logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 class ChatTemplate:
     @staticmethod
     def generate_rag_prompt(question, documents):
         context_str = "\n".join(documents)
-        if context_str and len(re.findall("[\u4E00-\u9FFF]", context_str)) / len(context_str) >= 0.3:
+        if context_str and len(re.findall("[\u4e00-\u9fff]", context_str)) / len(context_str) >= 0.3:
             # chinese context
             template = """
 ### 你将扮演一个乐于助人、尊重他人并诚实的助手，你的目标是帮助用户解答问题。有效地利用来自本地知识库的搜索结果。确保你的回答中只包含相关信息。如果你不确定问题的答案，请避免分享不准确的信息。
@@ -35,7 +51,6 @@ If you don't know the answer to a question, please don't share false information
         return template.format(context=context_str, question=question)
 
 
-MEGA_SERVICE_HOST_IP = os.getenv("MEGA_SERVICE_HOST_IP", "0.0.0.0")
 MEGA_SERVICE_PORT = int(os.getenv("MEGA_SERVICE_PORT", 8888))
 GUARDRAIL_SERVICE_HOST_IP = os.getenv("GUARDRAIL_SERVICE_HOST_IP", "0.0.0.0")
 GUARDRAIL_SERVICE_PORT = int(os.getenv("GUARDRAIL_SERVICE_PORT", 80))
@@ -47,10 +62,15 @@ RERANK_SERVER_HOST_IP = os.getenv("RERANK_SERVER_HOST_IP", "0.0.0.0")
 RERANK_SERVER_PORT = int(os.getenv("RERANK_SERVER_PORT", 80))
 LLM_SERVER_HOST_IP = os.getenv("LLM_SERVER_HOST_IP", "0.0.0.0")
 LLM_SERVER_PORT = int(os.getenv("LLM_SERVER_PORT", 80))
-LLM_MODEL = os.getenv("LLM_MODEL", "Intel/neural-chat-7b-v3-3")
+LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 
 
 def align_inputs(self, inputs, cur_node, runtime_graph, llm_parameters_dict, **kwargs):
+    logger.debug(
+        f"Aligning inputs for service: {self.services[cur_node].name}, type: {self.services[cur_node].service_type}"
+    )
+
     if self.services[cur_node].service_type == ServiceType.EMBEDDING:
         inputs["inputs"] = inputs["text"]
         del inputs["text"]
@@ -66,12 +86,15 @@ def align_inputs(self, inputs, cur_node, runtime_graph, llm_parameters_dict, **k
         next_inputs["messages"] = [{"role": "user", "content": inputs["inputs"]}]
         next_inputs["max_tokens"] = llm_parameters_dict["max_tokens"]
         next_inputs["top_p"] = llm_parameters_dict["top_p"]
-        next_inputs["stream"] = inputs["streaming"]
+        next_inputs["stream"] = inputs["stream"]
         next_inputs["frequency_penalty"] = inputs["frequency_penalty"]
         # next_inputs["presence_penalty"] = inputs["presence_penalty"]
         # next_inputs["repetition_penalty"] = inputs["repetition_penalty"]
         next_inputs["temperature"] = inputs["temperature"]
         inputs = next_inputs
+
+    # Log the aligned inputs (be careful with sensitive data)
+    logger.debug(f"Aligned inputs for {self.services[cur_node].name}: {type(inputs)}")
     return inputs
 
 
@@ -112,7 +135,9 @@ def align_outputs(self, data, cur_node, inputs, runtime_graph, llm_parameters_di
                 elif input_variables == ["question"]:
                     prompt = prompt_template.format(question=data["initial_query"])
                 else:
-                    print(f"{prompt_template} not used, we only support 2 input variables ['question', 'context']")
+                    logger.warning(
+                        f"{prompt_template} not used, we only support 2 input variables ['question', 'context']"
+                    )
                     prompt = ChatTemplate.generate_rag_prompt(data["initial_query"], docs)
             else:
                 prompt = ChatTemplate.generate_rag_prompt(data["initial_query"], docs)
@@ -141,13 +166,18 @@ def align_outputs(self, data, cur_node, inputs, runtime_graph, llm_parameters_di
             elif input_variables == ["question"]:
                 prompt = prompt_template.format(question=prompt)
             else:
-                print(f"{prompt_template} not used, we only support 2 input variables ['question', 'context']")
+                logger.warning(f"{prompt_template} not used, we only support 2 input variables ['question', 'context']")
                 prompt = ChatTemplate.generate_rag_prompt(prompt, reranked_docs)
         else:
             prompt = ChatTemplate.generate_rag_prompt(prompt, reranked_docs)
 
         next_data["inputs"] = prompt
 
+    elif self.services[cur_node].service_type == ServiceType.LLM and not llm_parameters_dict["stream"]:
+        if "faqgen" in self.services[cur_node].endpoint:
+            next_data = data
+        else:
+            next_data["text"] = data["choices"][0]["message"]["content"]
     else:
         next_data = data
 
@@ -155,21 +185,65 @@ def align_outputs(self, data, cur_node, inputs, runtime_graph, llm_parameters_di
 
 
 def align_generator(self, gen, **kwargs):
-    # openai reaponse format
-    # b'data:{"id":"","object":"text_completion","created":1725530204,"model":"meta-llama/Meta-Llama-3-8B-Instruct","system_fingerprint":"2.0.1-native","choices":[{"index":0,"delta":{"role":"assistant","content":"?"},"logprobs":null,"finish_reason":null}]}\n\n'
-    for line in gen:
-        line = line.decode("utf-8")
-        start = line.find("{")
-        end = line.rfind("}") + 1
+    """Aligns the generator output to match ChatQnA's format of sending bytes.
 
-        json_str = line[start:end]
+    Handles different LLM output formats (TGI, OpenAI) and properly filters
+    empty or null content chunks to avoid UI display issues.
+    """
+    # OpenAI response format example:
+    # b'data:{"id":"","object":"text_completion","created":1725530204,"model":"meta-llama/Meta-Llama-3-8B-Instruct",
+    # "system_fingerprint":"2.0.1-native","choices":[{"index":0,"delta":{"role":"assistant","content":"?"},
+    # "logprobs":null,"finish_reason":null}]}\n\n'
+
+    for line in gen:
         try:
-            # sometimes yield empty chunk, do a fallback here
+            line = line.decode("utf-8")
+            start = line.find("{")
+            end = line.rfind("}") + 1
+
+            # Skip lines with invalid JSON structure
+            if start == -1 or end <= start:
+                logger.debug("Skipping line with invalid JSON structure")
+                continue
+
+            json_str = line[start:end]
+
+            # Parse the JSON data
             json_data = json.loads(json_str)
-            if json_data["choices"][0]["finish_reason"] != "eos_token":
-                yield f"data: {repr(json_data['choices'][0]['delta']['content'].encode('utf-8'))}\n\n"
+
+            # Handle TGI format responses
+            if "ops" in json_data and "op" in json_data["ops"][0]:
+                if "value" in json_data["ops"][0] and isinstance(json_data["ops"][0]["value"], str):
+                    yield f"data: {repr(json_data['ops'][0]['value'].encode('utf-8'))}\n\n"
+                # Empty value chunks are silently skipped
+
+            # Handle OpenAI format responses
+            elif "choices" in json_data and len(json_data["choices"]) > 0:
+                # Only yield content if it exists and is not null
+                if (
+                    "delta" in json_data["choices"][0]
+                    and "content" in json_data["choices"][0]["delta"]
+                    and json_data["choices"][0]["delta"]["content"] is not None
+                ):
+                    content = json_data["choices"][0]["delta"]["content"]
+                    yield f"data: {repr(content.encode('utf-8'))}\n\n"
+                # Null content chunks are silently skipped
+                elif (
+                    "delta" in json_data["choices"][0]
+                    and "content" in json_data["choices"][0]["delta"]
+                    and json_data["choices"][0]["delta"]["content"] is None
+                ):
+                    logger.debug("Skipping null content chunk")
+
+        except json.JSONDecodeError as e:
+            # Log the error with the problematic JSON string for better debugging
+            logger.error(f"JSON parsing error in align_generator: {e}\nProblematic JSON: {json_str[:200]}")
+            # Skip sending invalid JSON to avoid UI issues
+            continue
         except Exception as e:
-            yield f"data: {repr(json_str.encode('utf-8'))}\n\n"
+            logger.error(f"Unexpected error in align_generator: {e}, line snippet: {line[:100]}...")
+            # Skip sending to avoid UI issues
+            continue
     yield "data: [DONE]\n\n"
 
 
@@ -181,6 +255,7 @@ class ChatQnAService:
         ServiceOrchestrator.align_outputs = align_outputs
         ServiceOrchestrator.align_generator = align_generator
         self.megaservice = ServiceOrchestrator()
+        self.endpoint = str(MegaServiceEndpoint.CHAT_QNA)
 
     def add_remote_service(self):
 
@@ -215,6 +290,7 @@ class ChatQnAService:
             name="llm",
             host=LLM_SERVER_HOST_IP,
             port=LLM_SERVER_PORT,
+            api_key=OPENAI_API_KEY,
             endpoint="/v1/chat/completions",
             use_remote_service=True,
             service_type=ServiceType.LLM,
@@ -223,7 +299,6 @@ class ChatQnAService:
         self.megaservice.flow_to(embedding, retriever)
         self.megaservice.flow_to(retriever, rerank)
         self.megaservice.flow_to(rerank, llm)
-        self.gateway = ChatQnAGateway(megaservice=self.megaservice, host="0.0.0.0", port=self.port)
 
     def add_remote_service_without_rerank(self):
 
@@ -249,6 +324,7 @@ class ChatQnAService:
             name="llm",
             host=LLM_SERVER_HOST_IP,
             port=LLM_SERVER_PORT,
+            api_key=OPENAI_API_KEY,
             endpoint="/v1/chat/completions",
             use_remote_service=True,
             service_type=ServiceType.LLM,
@@ -256,7 +332,6 @@ class ChatQnAService:
         self.megaservice.add(embedding).add(retriever).add(llm)
         self.megaservice.flow_to(embedding, retriever)
         self.megaservice.flow_to(retriever, llm)
-        self.gateway = ChatQnAGateway(megaservice=self.megaservice, host="0.0.0.0", port=self.port)
 
     def add_remote_service_with_guardrails(self):
         guardrail_in = MicroService(
@@ -295,6 +370,7 @@ class ChatQnAService:
             name="llm",
             host=LLM_SERVER_HOST_IP,
             port=LLM_SERVER_PORT,
+            api_key=OPENAI_API_KEY,
             endpoint="/v1/chat/completions",
             use_remote_service=True,
             service_type=ServiceType.LLM,
@@ -314,20 +390,132 @@ class ChatQnAService:
         self.megaservice.flow_to(retriever, rerank)
         self.megaservice.flow_to(rerank, llm)
         # self.megaservice.flow_to(llm, guardrail_out)
-        self.gateway = ChatQnAGateway(megaservice=self.megaservice, host="0.0.0.0", port=self.port)
+
+    def add_remote_service_faqgen(self):
+
+        embedding = MicroService(
+            name="embedding",
+            host=EMBEDDING_SERVER_HOST_IP,
+            port=EMBEDDING_SERVER_PORT,
+            endpoint="/embed",
+            use_remote_service=True,
+            service_type=ServiceType.EMBEDDING,
+        )
+
+        retriever = MicroService(
+            name="retriever",
+            host=RETRIEVER_SERVICE_HOST_IP,
+            port=RETRIEVER_SERVICE_PORT,
+            endpoint="/v1/retrieval",
+            use_remote_service=True,
+            service_type=ServiceType.RETRIEVER,
+        )
+
+        rerank = MicroService(
+            name="rerank",
+            host=RERANK_SERVER_HOST_IP,
+            port=RERANK_SERVER_PORT,
+            endpoint="/rerank",
+            use_remote_service=True,
+            service_type=ServiceType.RERANK,
+        )
+
+        llm = MicroService(
+            name="llm",
+            host=LLM_SERVER_HOST_IP,
+            port=LLM_SERVER_PORT,
+            endpoint="/v1/faqgen",
+            use_remote_service=True,
+            service_type=ServiceType.LLM,
+        )
+        self.megaservice.add(embedding).add(retriever).add(rerank).add(llm)
+        self.megaservice.flow_to(embedding, retriever)
+        self.megaservice.flow_to(retriever, rerank)
+        self.megaservice.flow_to(rerank, llm)
+
+    async def handle_request(self, request: Request):
+        data = await request.json()
+        stream_opt = data.get("stream", True)
+        chat_request = ChatCompletionRequest.parse_obj(data)
+        prompt = handle_message(chat_request.messages)
+        parameters = LLMParams(
+            max_tokens=chat_request.max_tokens if chat_request.max_tokens else 1024,
+            top_k=chat_request.top_k if chat_request.top_k else 10,
+            top_p=chat_request.top_p if chat_request.top_p else 0.95,
+            temperature=chat_request.temperature if chat_request.temperature else 0.01,
+            frequency_penalty=chat_request.frequency_penalty if chat_request.frequency_penalty else 0.0,
+            presence_penalty=chat_request.presence_penalty if chat_request.presence_penalty else 0.0,
+            repetition_penalty=chat_request.repetition_penalty if chat_request.repetition_penalty else 1.03,
+            stream=stream_opt,
+            chat_template=chat_request.chat_template if chat_request.chat_template else None,
+            model=chat_request.model if chat_request.model else None,
+        )
+        retriever_parameters = RetrieverParms(
+            search_type=chat_request.search_type if chat_request.search_type else "similarity",
+            k=chat_request.k if chat_request.k else 4,
+            distance_threshold=chat_request.distance_threshold if chat_request.distance_threshold else None,
+            fetch_k=chat_request.fetch_k if chat_request.fetch_k else 20,
+            lambda_mult=chat_request.lambda_mult if chat_request.lambda_mult else 0.5,
+            score_threshold=chat_request.score_threshold if chat_request.score_threshold else 0.2,
+        )
+        reranker_parameters = RerankerParms(
+            top_n=chat_request.top_n if chat_request.top_n else 1,
+        )
+        result_dict, runtime_graph = await self.megaservice.schedule(
+            initial_inputs={"text": prompt},
+            llm_parameters=parameters,
+            retriever_parameters=retriever_parameters,
+            reranker_parameters=reranker_parameters,
+        )
+        for node, response in result_dict.items():
+            if isinstance(response, StreamingResponse):
+                return response
+        last_node = runtime_graph.all_leaves()[-1]
+        response = result_dict[last_node]["text"]
+        choices = []
+        usage = UsageInfo()
+        choices.append(
+            ChatCompletionResponseChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=response),
+                finish_reason="stop",
+            )
+        )
+        return ChatCompletionResponse(model="chatqna", choices=choices, usage=usage)
+
+    def start(self):
+
+        self.service = MicroService(
+            self.__class__.__name__,
+            service_role=ServiceRoleType.MEGASERVICE,
+            host=self.host,
+            port=self.port,
+            endpoint=self.endpoint,
+            input_datatype=ChatCompletionRequest,
+            output_datatype=ChatCompletionResponse,
+        )
+
+        self.service.add_route(self.endpoint, self.handle_request, methods=["POST"])
+
+        self.service.start()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--without-rerank", action="store_true")
     parser.add_argument("--with-guardrails", action="store_true")
+    parser.add_argument("--faqgen", action="store_true")
 
     args = parser.parse_args()
 
-    chatqna = ChatQnAService(host=MEGA_SERVICE_HOST_IP, port=MEGA_SERVICE_PORT)
+    chatqna = ChatQnAService(port=MEGA_SERVICE_PORT)
     if args.without_rerank:
         chatqna.add_remote_service_without_rerank()
     elif args.with_guardrails:
         chatqna.add_remote_service_with_guardrails()
+    elif args.faqgen:
+        chatqna.add_remote_service_faqgen()
     else:
         chatqna.add_remote_service()
+
+    chatqna.start()

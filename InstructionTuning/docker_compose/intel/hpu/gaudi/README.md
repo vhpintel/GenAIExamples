@@ -1,8 +1,12 @@
-# Deploy Instruction Tuning Service on Gaudi
+# Deploy Instruction Tuning Service on Intel® Gaudi® Platform
 
 This document outlines the deployment process for a Instruction Tuning Service utilizing the [GenAIComps](https://github.com/opea-project/GenAIComps.git) microservice on Intel Gaudi server. The steps include Docker image creation, container deployment. We will publish the Docker images to Docker Hub, it will simplify the deployment process for this service.
 
-## 🚀 Build Docker Images
+# Table of contents
+
+1. [Instruction Tuning Quick Start deployment](#Instruction-Tuning-Quick-Start-deployment)
+
+## Instruction Tuning Quick Start deployment
 
 First of all, you need to build Docker Images locally. This step can be ignored after the Docker images published to Docker hub.
 
@@ -13,7 +17,7 @@ Build docker image with below command:
 ```bash
 git clone https://github.com/opea-project/GenAIComps.git
 cd GenAIComps
-docker build -t opea/finetuning-gaudi:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/finetuning/Dockerfile.intel_hpu .
+docker build -t opea/finetuning-gaudi:latest --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f comps/finetuning/src/Dockerfile.intel_hpu .
 ```
 
 ### 2. Run Docker with CLI

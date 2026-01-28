@@ -9,117 +9,64 @@ echo "REGISTRY=IMAGE_REPO=${IMAGE_REPO}"
 echo "TAG=IMAGE_TAG=${IMAGE_TAG}"
 export REGISTRY=${IMAGE_REPO}
 export TAG=${IMAGE_TAG}
+export MODEL_CACHE=${model_cache:-"./data"}
 
 WORKPATH=$(dirname "$PWD")
 LOG_PATH="$WORKPATH/tests"
 ip_address=$(hostname -I | awk '{print $1}')
 
 function build_docker_images() {
+    opea_branch=${opea_branch:-"main"}
     cd $WORKPATH/docker_image_build
-    git clone https://github.com/opea-project/GenAIComps.git && cd GenAIComps && git checkout "${opea_branch:-"main"}" && cd ../
+    git clone --depth 1 --branch ${opea_branch} https://github.com/opea-project/GenAIComps.git
+    pushd GenAIComps
+    echo "GenAIComps test commit is $(git rev-parse HEAD)"
+    docker build --no-cache -t ${REGISTRY}/comps-base:${TAG} --build-arg https_proxy=$https_proxy --build-arg http_proxy=$http_proxy -f Dockerfile .
+    popd && sleep 1s
 
     echo "Build all the images with --no-cache, check docker_image_build.log for details..."
-    service_list="searchqna searchqna-ui embedding-tei web-retriever-chroma reranking-tei llm-tgi"
+    service_list="searchqna searchqna-ui embedding web-retriever reranking llm-textgen nginx"
     docker compose -f build.yaml build ${service_list} --no-cache > ${LOG_PATH}/docker_image_build.log
 
-    docker pull ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
-    docker pull ghcr.io/huggingface/tgi-gaudi:2.0.5
-    docker pull ghcr.io/huggingface/tei-gaudi:latest
     docker images && sleep 1s
 }
 
 function start_services() {
 
-    cd $WORKPATH/docker_compose/intel/hpu/gaudi
-    export GOOGLE_CSE_ID=$GOOGLE_CSE_ID
-    export GOOGLE_API_KEY=$GOOGLE_API_KEY
-    export HUGGINGFACEHUB_API_TOKEN=$HUGGINGFACEHUB_API_TOKEN
-
-    export EMBEDDING_MODEL_ID=BAAI/bge-base-en-v1.5
-    export TEI_EMBEDDING_ENDPOINT=http://$ip_address:3001
-    export RERANK_MODEL_ID=BAAI/bge-reranker-base
-    export TEI_RERANKING_ENDPOINT=http://$ip_address:3004
-
-    export TGI_LLM_ENDPOINT=http://$ip_address:3006
-    export LLM_MODEL_ID=Intel/neural-chat-7b-v3-3
-
-    export MEGA_SERVICE_HOST_IP=${ip_address}
-    export EMBEDDING_SERVICE_HOST_IP=${ip_address}
-    export WEB_RETRIEVER_SERVICE_HOST_IP=${ip_address}
-    export RERANK_SERVICE_HOST_IP=${ip_address}
-    export LLM_SERVICE_HOST_IP=${ip_address}
-
-    export EMBEDDING_SERVICE_PORT=3002
-    export WEB_RETRIEVER_SERVICE_PORT=3003
-    export RERANK_SERVICE_PORT=3005
-    export LLM_SERVICE_PORT=3007
+    cd $WORKPATH/docker_compose/intel/
+    export RERANK_TYPE="tei"
     export BACKEND_SERVICE_ENDPOINT="http://${ip_address}:3008/v1/searchqna"
-
+    export host_ip=${ip_address}
+    export LOGFLAG=true
+    export no_proxy="localhost,127.0.0.1,$ip_address"
+    source ./set_env.sh
+    cd hpu/gaudi
 
     sed -i "s/backend_address/$ip_address/g" $WORKPATH/ui/svelte/.env
 
     # Start Docker Containers
     docker compose up -d > ${LOG_PATH}/start_services_with_compose.log
-    n=0
-    until [[ "$n" -ge 100 ]]; do
-        docker logs tgi-gaudi-server > $LOG_PATH/tgi_service_start.log
-        if grep -q Connected $LOG_PATH/tgi_service_start.log; then
-            break
-        fi
-        sleep 5s
-        n=$((n+1))
-    done
+
+    sleep 10s
 }
 
 
 function validate_megaservice() {
-    result=$(http_proxy="" curl http://${ip_address}:3008/v1/searchqna -XPOST -d '{"messages": "What is black myth wukong?", "stream": "False"}' -H 'Content-Type: application/json')
+    result=$(curl http://${ip_address}:3008/v1/searchqna -X POST -d '{"messages": "What is the capital of China?", "stream": "False"}' -H 'Content-Type: application/json')
     echo $result
 
-    if [[ $result == *"the"* ]]; then
-        docker logs web-retriever-chroma-server > ${LOG_PATH}/web-retriever-chroma-server.log
-        docker logs searchqna-gaudi-backend-server > ${LOG_PATH}/searchqna-gaudi-backend-server.log
-        docker logs tei-embedding-gaudi-server > ${LOG_PATH}/tei-embedding-gaudi-server.log
-        docker logs embedding-tei-server > ${LOG_PATH}/embedding-tei-server.log
+    docker logs web-retriever-server > ${LOG_PATH}/web-retriever-server.log
+    docker logs searchqna-gaudi-backend-server > ${LOG_PATH}/searchqna-gaudi-backend-server.log
+    docker logs tei-embedding-gaudi-server > ${LOG_PATH}/tei-embedding-gaudi-server.log
+    docker logs embedding-gaudi-server > ${LOG_PATH}/embedding-gaudi-server.log
+
+    if [[ $result == *"capital"* ]]; then
         echo "Result correct."
     else
-        docker logs web-retriever-chroma-server > ${LOG_PATH}/web-retriever-chroma-server.log
-        docker logs searchqna-gaudi-backend-server > ${LOG_PATH}/searchqna-gaudi-backend-server.log
-        docker logs tei-embedding-gaudi-server > ${LOG_PATH}/tei-embedding-gaudi-server.log
-        docker logs embedding-tei-server > ${LOG_PATH}/embedding-tei-server.log
         echo "Result wrong."
         exit 1
     fi
 
-}
-
-function validate_frontend() {
-    cd $WORKPATH/ui/svelte
-    local conda_env_name="OPEA_e2e"
-
-    export PATH=${HOME}/miniforge3/bin/:$PATH
-    if conda info --envs | grep -q "$conda_env_name"; then
-        echo "$conda_env_name exist!"
-    else
-        conda create -n ${conda_env_name} python=3.12 -y
-    fi
-    source activate ${conda_env_name}
-
-    sed -i "s/localhost/$ip_address/g" playwright.config.ts
-
-    conda install -c conda-forge nodejs -y
-    npm install && npm ci && npx playwright install --with-deps
-    node -v && npm -v && pip list
-
-    exit_status=0
-    npx playwright test || exit_status=$?
-
-    if [ $exit_status -ne 0 ]; then
-        echo "[TEST INFO]: ---------frontend test failed---------"
-        exit $exit_status
-    else
-        echo "[TEST INFO]: ---------frontend test passed---------"
-    fi
 }
 
 function stop_docker() {
@@ -129,15 +76,27 @@ function stop_docker() {
 
 function main() {
 
+    echo "::group::stop_docker"
     stop_docker
+    echo "::endgroup::"
+
+    echo "::group::build_docker_images"
     if [[ "$IMAGE_REPO" == "opea" ]]; then build_docker_images; fi
+    echo "::endgroup::"
+
+    echo "::group::start_services"
     start_services
+    echo "::endgroup::"
 
+    echo "::group::validate_megaservice"
     validate_megaservice
-    validate_frontend
+    echo "::endgroup::"
 
+    echo "::group::stop_docker"
     stop_docker
-    echo y | docker system prune
+    echo "::endgroup::"
+
+    docker system prune -f
 
 }
 

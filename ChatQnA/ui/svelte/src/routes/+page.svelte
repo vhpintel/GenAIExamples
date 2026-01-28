@@ -39,6 +39,8 @@
 	import ChatMessage from "$lib/modules/chat/ChatMessage.svelte";
 	import { fetchAllFile } from "$lib/network/upload/Network.js";
 	import { getNotificationsContext } from "svelte-notifications";
+	import Spinner from "$lib/shared/components/loading/Spinner.svelte";
+
 
 	let query: string = "";
 	let loading: boolean = false;
@@ -100,7 +102,7 @@
 		return decoded;
 	}
 
-	const callTextStream = async (query: string, startSendTime: number) => {
+	const callTextStream = async (query: object, startSendTime: number) => {
 		try {
 			const eventSource = await fetchTextStream(query);
 			eventSource.addEventListener("error", (e: any) => {
@@ -177,6 +179,22 @@
 		}
 	};
 
+	function mapRole(r: number): "user" | "assistant" | "system" {
+		if (r === 1) return "user";
+		if (r === 0) return "assistant";
+		return "system";
+	}
+
+	function multiMessages(
+		history: any[]
+	): { role: "user" | "assistant" | "system"; content: string }[] {
+		return history.map((m) => ({
+			role: mapRole(m.role),
+			content:
+				typeof m.content === "string" ? m.content : String(m.content ?? ""),
+		}));
+	}
+
 	const handleTextSubmit = async () => {
 		loading = true;
 		const newMessage = {
@@ -190,7 +208,7 @@
 		storeMessages();
 		query = "";
 
-		await callTextStream(newMessage.content, getCurrentTimeStamp());
+		await callTextStream(multiMessages(chatMessages), getCurrentTimeStamp());
 
 		scrollToBottom(scrollToDiv);
 		storeMessages();
@@ -241,8 +259,13 @@
 						type="submit"
 						id="send"
 						class="absolute bottom-2.5 end-2.5 px-4 py-2 text-sm font-medium text-white dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800"
-						><PaperAirplane /></button
-					>
+						>
+						{#if loading}
+							<Spinner />
+						{:else}
+							<PaperAirplane />
+						{/if}
+					</button>
 				</div>
 			</div>
 		</div>
