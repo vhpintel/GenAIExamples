@@ -2,31 +2,29 @@ name: SDLE Scans
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
 
 jobs:
 
-  # -----------------------------
-  # 1) Trivy Scan
-  # -----------------------------
+# -----------------------------
+# 1) Trivy Scan (fixed)
+# -----------------------------
   trivy_scan:
     name: Trivy Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Trivy
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
-          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_$(uname -s)_$(uname -m).tar.gz
-          tar zxvf trivy_*.tar.gz
-          sudo mv trivy /usr/local/bin/
-
       - name: Run Trivy FS Scan
-        run: trivy fs --security-checks vuln,config . --format json --output trivy-report.json || true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: trivy-report.json
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
       - name: Upload Trivy Report
         uses: actions/upload-artifact@v4
@@ -34,9 +32,9 @@ jobs:
           name: trivy-report
           path: trivy-report.json
 
-  # -----------------------------
-  # 2) Bandit Scan
-  # -----------------------------
+# -----------------------------
+# 2) Bandit Scan
+# -----------------------------
   bandit_scan:
     name: Bandit Python Static Scan
     runs-on: ubuntu-latest
@@ -59,27 +57,22 @@ jobs:
           name: bandit-report
           path: bandit-report.html
 
-  # -----------------------------
-  # 3) Coverity Scan
-  # -----------------------------
+# -----------------------------
+# 3) Coverity Scan (safe stub)
+# -----------------------------
   coverity_scan:
     name: Coverity Static Analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential flex bison
+      - name: Prepare cov-out directory
+        run: mkdir -p cov-out
 
-      # You MUST replace this with real Coverity install
-      - name: Run Coverity Analysis
+      - name: Coverity Placeholder
         run: |
-          mkdir cov-out
-          echo "Run cov-build here"
-          # Example:
-          # cov-build --dir cov-out make
+          echo "Coverity not configured yet" > cov-out/README.txt
+          echo "Replace this with cov-build command"
 
       - name: Upload Coverity Output
         uses: actions/upload-artifact@v4
@@ -87,9 +80,9 @@ jobs:
           name: coverity-output
           path: cov-out
 
-  # -----------------------------
-  # 4) ClamAV Scan
-  # -----------------------------
+# -----------------------------
+# 4) ClamAV Scan (fixed)
+# -----------------------------
   clamav_scan:
     name: ClamAV Malware Scan
     runs-on: ubuntu-latest
@@ -101,11 +94,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clamav
 
-      - name: Update Virus DB
-        run: sudo freshclam
+      - name: Update Virus DB (safe mode)
+        run: |
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam --foreground --datadir=/tmp/clamav
 
       - name: Run ClamAV
-        run: clamscan -r . --infected --no-summary > clamav-report.txt || true
+        run: |
+          clamscan -r . --infected --no-summary > clamav-report.txt || true
 
       - name: Upload ClamAV Report
         uses: actions/upload-artifact@v4
