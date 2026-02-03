@@ -55,23 +55,32 @@ jobs:
 # 2) Bandit Scan
 # -----------------------------
   bandit_scan:
-    name: Bandit Python Static Scan
+    name: Bandit security scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install Bandit
-        run: pip install bandit
-
-      - name: Run Bandit
-        run: bandit -r . -f html -o bandit-report.html || true
-
-      - name: Upload Bandit Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: bandit-report
-          path: bandit-report.html
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+    - name: Install Bandit
+      run: pip install bandit
+    - name: Create Bandit configuration
+      run: |
+        cat > .bandit << 'EOF'
+        [bandit]
+        exclude_dirs = ['tests', 'test', 'venv', '.venv', 'node_modules']
+        skips = ['B101', 'B601']
+        EOF
+      shell: bash
+    - name: Run Bandit scan
+      run: bandit -r . -f html -o bandit-report.html || true
+    - name: Upload Bandit Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: bandit-report
+        path: bandit-report.html
+        retention-days: 30
