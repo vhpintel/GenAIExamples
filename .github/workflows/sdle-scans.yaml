@@ -10,6 +10,10 @@ on:
     branches: [ main ]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    
+concurrency:
+  group: sdle-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
